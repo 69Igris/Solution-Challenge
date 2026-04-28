@@ -1,0 +1,39 @@
+{
+  "name": "sankalp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SANKALP — India's AI Conductor for Crisis Response. Google Solution Challenge 2026.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^0.3.1",
+    "clsx": "^2.1.1",
+    "firebase": "^11.10.0",
+    "firebase-admin": "^13.0.2",
+    "framer-motion": "^11.18.2",
+    "lucide-react": "^0.460.0",
+    "mapbox-gl": "^3.22.0",
+    "next": "^16.2.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "tailwind-merge": "^2.6.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/mapbox-gl": "^3.4.1",
+    "@types/node": "^22.19.17",
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "autoprefixer": "^10.5.0",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^15.0.3",
+    "postcss": "^8.5.12",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sankalp-firestore-schema-v1",
+  "title": "SANKALP Firestore Schema",
+  "description": "NoSQL document blueprint for the SANKALP MVP. Each top-level key is a Firestore collection. Field types use Firestore primitives + GeoPoint + Timestamp + Array + Map.",
+  "version": "1.0.0",
+  "collections": {
+    "users": {
+      "description": "Unified profile document keyed by Firebase Auth UID. Citizens, volunteers, and coordinators live in this single collection — separated by `role`. Volunteers carry an additional nested `volunteer` map.",
+      "documentId": "{uid}",
+      "fields": {
+        "uid": "string",
+        "role": "string<'citizen' | 'volunteer' | 'coordinator' | 'ngo_admin'>",
+        "phone": "string (E.164 format, e.g. +919876543210)",
+        "displayName": "string | null",
+        "preferredLanguage": "string<'en'|'hi'|'ta'|'te'|'kn'|'ml'|'mr'|'bn'|'gu'|'pa'|'or'|'as'>",
+        "isLowBandwidth": "boolean (set client-side from navigator.connection)",
+        "sosRaisedCount": "number",
+        "livesAssistedCount": "number",
+        "createdAt": "Timestamp",
+        "updatedAt": "Timestamp",
+        "volunteer": {
+          "_nullable": true,
+          "_description": "Present only when role === 'volunteer'.",
+          "skills": "Array<string> e.g. ['first_aid','driver']",
+          "radiusKm": "number (1-50)",
+          "hasVehicle": "boolean",
+          "vehicleCapacityKg": "number | null",
+          "isAvailable": "boolean",
+          "lastKnownLocation": "GeoPoint | null",
+          "activeMissionId": "string | null",
+          "completedMissions": "number",
+          "averageResponseMinutes": "number | null"
+        }
+      },
+      "indexes": [
+        { "fields": ["role", "volunteer.isAvailable", "volunteer.lastKnownLocation"], "purpose": "Geo radius queries against available volunteers" },
+        { "fields": ["role", "preferredLanguage"] }
+      ]
+    },
+
+    "sos_alerts": {
+      "description": "The heart of SANKALP. One document per citizen-raised SOS. Lifecycle: pending → parsed (Gemini Cloud Function fills `parsed`) → matched (matching engine sets matchedVolunteerUid + matchReason) → in_progress → resolved.",
+      "documentId": "{alertId} (auto-generated)",
+      "fields": {
+        "alertId": "string",
+        "citizenUid": "string",
+        "status": "string<'pending'|'parsed'|'matched'|'in_progress'|'resolved'|'cancelled'|'flagged'>",
+        "rawVoiceUrl": "string | null (Cloud Storage path, ≤30s, max 1MB compressed)",
+        "rawPhotoUrl": "string | null (Cloud Storage path, ≤2MB compressed)",
+        "rawTextInput": "string | null",
+        "inputLanguage": "string (ISO 639-1)",
+        "parsed": {
+          "_nullable": true,
+          "_description": "Populated by `onSosCreate` Cloud Function via Gemini 1.5 Pro multimodal.",
+          "needTypes": "Array<string<'medical'|'evacuation'|'shelter'|'food'|'water'|'rescue'|'other'>>",
+          "severity": "string<'critical'|'high'|'medium'|'low'>",
+          "severityScore": "number (0-100)",
+          "summary": "string (English, single sentence for coordinator dashboard)",
+          "summaryLocalized": "string (same sentence in inputLanguage)",
+          "headcount": "number",
+          "vulnerabilityFlags": {
+            "elderly": "boolean",
+            "child": "boolean",
+            "pregnant": "boolean",
+            "disabled": "boolean",
+            "injured": "boolean"
+          },
+          "accessibilityNotes": "string | null",
+          "confidence": "number (0-1)"
+        },
+        "location": "GeoPoint",
+        "geohash": "string (precision 7, for radius queries)",
+        "pincode": "string | null",
+        "cityDistrict": "string | null",
+        "matchedVolunteerUid": "string | null",
+        "matchedAt": "Timestamp | null",
+        "matchScore": "number | null (0-1)",
+        "matchReason": "string | null (the 'Why you were matched' line)",
+        "createdAt": "Timestamp",
+        "resolvedAt": "Timestamp | null",
+        "responseMinutes": "number | null",
+        "duplicateOfAlertId": "string | null",
+        "flagReason": "string | null"
+      },
+      "indexes": [
+        { "fields": ["status", "parsed.severityScore", "createdAt"], "purpose": "Coordinator dashboard active queue" },
+        { "fields": ["geohash", "status", "createdAt"], "purpose": "Geo + status queries from volunteer app" },
+        { "fields": ["citizenUid", "createdAt"], "purpose": "Citizen's own SOS history" },
+        { "fields": ["matchedVolunteerUid", "status"], "purpose": "Volunteer's active mission lookup" }
+      ]
+    },
+
+    "missions": {
+      "description": "Volunteer-side mirror of an active match. Created when a volunteer accepts an SOS. Carries route + ETA + on-site state.",
+      "documentId": "{missionId}",
+      "fields": {
+        "missionId": "string",
+        "alertId": "string",
+        "volunteerUid": "string",
+        "status": "string<'assigned'|'en_route'|'on_site'|'completed'|'aborted'>",
+        "acceptedAt": "Timestamp",
+        "arrivedAt": "Timestamp | null",
+        "completedAt": "Timestamp | null",
+        "routePolyline": "string | null (encoded polyline from Routes API)",
+        "distanceMeters": "number",
+        "estimatedDurationSeconds": "number"
+      },
+      "indexes": [
+        { "fields": ["volunteerUid", "status"] },
+        { "fields": ["alertId"] }
+      ]
+    },
+
+    "crisis_zones": {
+      "description": "Aggregated rollup for the coordinator dashboard's predictive heatmap. Updated by scheduled Cloud Function every 60s.",
+      "documentId": "{zoneId}",
+      "fields": {
+        "zoneId": "string",
+        "name": "string",
+        "geohashPrefix": "string (precision 5)",
+        "activeAlertCount": "number",
+        "predictedSurgeMinutes": "number | null (e.g. 45 = surge expected in 45 minutes)",
+        "predictedSurgeConfidence": "number | null (0-1)",
+        "unmetNeedCount": "number",
+        "lastUpdatedAt": "Timestamp"
+      }
+    }
+  },
+
+  "securityNotes": [
+    "Citizens may read/write only their own user doc and the sos_alerts they created.",
+    "Volunteers may read sos_alerts within their geohash bucket where status in ('parsed','matched') and matchedVolunteerUid is null OR == self.",
+    "Coordinators may read all sos_alerts and crisis_zones; write only matchedVolunteerUid and status transitions.",
+    "All write paths involving `parsed` are restricted to Cloud Functions (server-only)."
+  ]
+}
