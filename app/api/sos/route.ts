@@ -27,6 +27,7 @@ import {
 import { adminAuth, adminDb, adminStorage } from '@/lib/firebase-admin';
 import { parseSosWithGemini, type SosParsed } from '@/lib/gemini-sos';
 import { encodeGeohash } from '@/lib/geohash';
+import { matchSosAlert, type MatchOutcome } from '@/lib/matcher';
 import type { SupportedLanguage } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -100,20 +101,28 @@ export async function POST(req: NextRequest) {
     const alertId = alertRef.id;
 
     // 4) PARALLEL: Storage uploads ‖ Gemini parse
+    //
+    // Storage is OPTIONAL. When `STORAGE_DISABLED=1` (Spark plan, no Blaze
+    // billing), we skip the upload entirely and write null URLs. The Gemini
+    // parse still receives the media inline as base64, so AI quality is
+    // identical — only post-parse media persistence is dropped.
+    //
+    // We also wrap each upload in try-catch so a misconfigured bucket never
+    // blocks an SOS from being recorded.
+    const storageDisabled = process.env.STORAGE_DISABLED === '1';
     const bucketName =
       process.env.FIREBASE_STORAGE_BUCKET ||
       process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET;
-    const bucket = bucketName
-      ? adminStorage().bucket(bucketName)
-      : adminStorage().bucket(); // defaults to project's primary bucket
 
-    const photoUploadP = photo
-      ? uploadMedia(bucket, alertId, 'photo', photo)
-      : Promise.resolve<string | null>(null);
+    const photoUploadP: Promise<string | null> =
+      !photo || storageDisabled
+        ? Promise.resolve(null)
+        : uploadMediaSafe(bucketName, alertId, 'photo', photo);
 
-    const voiceUploadP = voice
-      ? uploadMedia(bucket, alertId, 'voice', voice)
-      : Promise.resolve<string | null>(null);
+    const voiceUploadP: Promise<string | null> =
+      !voice || storageDisabled
+        ? Promise.resolve(null)
+        : uploadMediaSafe(bucketName, alertId, 'voice', voice);
 
     const parsePromise: Promise<SosParsed> = parseSosWithGemini({
       photo: photo
@@ -172,6 +181,7 @@ export async function POST(req: NextRequest) {
       matchedAt: null,
       matchScore: null,
       matchReason: null,
+      parsedAt: FieldValue.serverTimestamp(),
 
       // Lifecycle
       createdAt: FieldValue.serverTimestamp(),
@@ -194,16 +204,32 @@ export async function POST(req: NextRequest) {
       { merge: true },
     ).catch(() => {/* don't fail the SOS on counter failure */});
 
-    // 7) TODO Sprint 2: enqueue matching engine job + FCM fanout
-    //    pubsub.topic('sos-match').publishMessage({ json: { alertId } })
+    // 7) MATCHING ENGINE — only for parsed (non-flagged) alerts
+    //    Wrapped in try-catch: a matching failure must NEVER fail the SOS.
+    //    The alert is already persisted; matching can be retried via /api/match.
+    let match: MatchOutcome | null = null;
+    if (alertDoc.status === 'parsed') {
+      try {
+        match = await matchSosAlert(alertId);
+      } catch (matchErr) {
+        console.warn(
+          '[match] matching failed (alert is still recorded):',
+          matchErr instanceof Error ? matchErr.message : matchErr,
+        );
+      }
+    }
+
+    // 8) TODO Sprint 3: FCM push to matched volunteer
+    //    if (match?.matched) await sendMissionPush(match.matchedVolunteerUid, alertId);
 
     return NextResponse.json(
       {
         ok: true,
         alertId,
-        status: alertDoc.status,
+        status: match?.matched ? 'matched' : alertDoc.status,
         parsed: alertDoc.parsed,
         flagReason: parsed.flagReason,
+        match,
         elapsedMs: Date.now() - startedAt,
       },
       { status: 201 },
@@ -275,6 +301,36 @@ async function readFile(
     fileName: file.name || `${field}.bin`,
     size: file.size,
   };
+}
+
+/**
+ * Resilient wrapper around `uploadMedia` — never throws.
+ *
+ * Catches any error (Storage not enabled on Spark plan, bucket missing,
+ * permission denied, network blip) and resolves with null. The SOS
+ * pipeline must never fail because of optional media persistence.
+ */
+async function uploadMediaSafe(
+  bucketName: string | undefined,
+  alertId: string,
+  kind: 'photo' | 'voice',
+  file: ReadFile,
+): Promise<string | null> {
+  try {
+    const bucket = bucketName
+      ? adminStorage().bucket(bucketName)
+      : adminStorage().bucket();
+    return await uploadMedia(bucket, alertId, kind, file);
+  } catch (err) {
+    // Common cause on Spark plan: "The specified bucket does not exist"
+    // or "Firebase Storage has not been set up on project ...".
+    // We log once and continue — the AI parse still has the inline buffer.
+    console.warn(
+      `[upload] ${kind} skipped — storage unavailable:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
 }
 
 /**

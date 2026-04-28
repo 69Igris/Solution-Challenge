@@ -1,0 +1,37 @@
+rules_version = '2';
+
+// ----------------------------------------------------------------------
+// SANKALP — Cloud Storage Security Rules
+//
+// All SOS media (photos + voice notes) lives at:
+//   /sos/{alertId}/photo.{ext}
+//   /sos/{alertId}/voice.{ext}
+//
+// Rules:
+//   - Writes are DENIED for clients. /api/sos uploads via the Admin SDK,
+//     which bypasses these rules.
+//   - Reads are permitted for any signed-in user. Effective access control
+//     happens at the Firestore-doc layer (firestore.rules) — if a client
+//     can read the alert doc, they have the signed URL; if they can't,
+//     they don't have the URL. Also, /api/sos returns 7-day signed URLs
+//     so this is a belt-and-suspenders setup.
+// ----------------------------------------------------------------------
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // SOS photo + voice
+    match /sos/{alertId}/{file=**} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

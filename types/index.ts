@@ -132,6 +132,8 @@ export interface SosAlertDoc {
   matchedAt: Timestamp | null;
   matchScore: number | null;
   matchReason: string | null;          // "Why you were matched" — explainability
+  parsedAt: Timestamp | null;
+  arrivedAt: Timestamp | null;
 
   // Lifecycle
   createdAt: Timestamp;

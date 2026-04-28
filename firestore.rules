@@ -1,0 +1,106 @@
+rules_version = '2';
+
+// ----------------------------------------------------------------------
+// SANKALP — Firestore Security Rules
+//
+// DEMO POSTURE (this file): any signed-in user (incl. anonymous) can
+// read sos_alerts, missions involving them, volunteer profiles, and
+// crisis_zones. All writes to sos_alerts and crisis_zones are denied —
+// they go through the Admin SDK on the server (/api/sos, /api/match,
+// /api/seed-demo).
+//
+// PRODUCTION POSTURE (after Top 100): tighten reads of sos_alerts and
+// volunteer profiles to citizen-owner / matched-volunteer / coordinator
+// role. Volunteer profiles' phone numbers should also be redacted at
+// the doc level.
+// ----------------------------------------------------------------------
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------- helper functions --------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function selfUid(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function userRole() {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(userPath) ? get(userPath).data.role : null;
+    }
+    function isCoordinator() {
+      return isSignedIn() && (userRole() == 'coordinator' || userRole() == 'ngo_admin');
+    }
+    function missionStatusTransitionAllowed(currentStatus, nextStatus) {
+      return (currentStatus == 'assigned' && nextStatus in ['en_route', 'aborted'])
+        || (currentStatus == 'en_route' && nextStatus in ['on_site', 'aborted'])
+        || (currentStatus == 'on_site' && nextStatus in ['completed', 'aborted']);
+    }
+
+    // -------- users/{uid} --------
+    match /users/{uid} {
+      // DEMO: any signed-in user may read volunteer profiles (so the
+      // dashboard can render their dots + names). Citizen + coordinator
+      // docs are scoped tightly.
+      allow read: if
+        selfUid(uid)
+        || isCoordinator()
+        || (isSignedIn() && resource.data.role == 'volunteer');
+
+      // Self-create with restricted role. Cannot self-promote to coordinator —
+      // role transitions to coordinator/ngo_admin happen via Admin SDK.
+      allow create: if selfUid(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.role in ['citizen', 'volunteer'];
+
+      // Self-update — role + privileged counters are immutable from client
+      allow update: if selfUid(uid)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.sosRaisedCount == resource.data.sosRaisedCount
+        && request.resource.data.livesAssistedCount == resource.data.livesAssistedCount;
+
+      allow delete: if false;
+    }
+
+    // -------- sos_alerts/{alertId} --------
+    match /sos_alerts/{alertId} {
+      // DEMO: any signed-in user may read so the coordinator dashboard
+      // and volunteer feed work without phone-OTP onboarding.
+      allow read: if isSignedIn();
+
+      // ALL writes go through the Admin SDK on the server (/api/sos,
+      // /api/match). No client-side writes are permitted.
+      allow write: if false;
+    }
+
+    // -------- missions/{missionId} --------
+    match /missions/{missionId} {
+      allow read: if isSignedIn() && (
+        resource.data.volunteerUid == request.auth.uid
+        || isCoordinator()
+      );
+
+      // Only the assigned volunteer can update status transitions
+      allow update: if isSignedIn()
+        && resource.data.volunteerUid == request.auth.uid
+        && request.resource.data.volunteerUid == resource.data.volunteerUid
+        && request.resource.data.alertId == resource.data.alertId
+        && missionStatusTransitionAllowed(resource.data.status, request.resource.data.status);
+
+      // Creation is server-side only (matching engine writes both sides)
+      allow create, delete: if false;
+    }
+
+    // -------- crisis_zones/{zoneId} --------
+    match /crisis_zones/{zoneId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Default deny — anything not matched above
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

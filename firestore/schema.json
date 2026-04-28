@@ -77,6 +77,8 @@
         "matchedAt": "Timestamp | null",
         "matchScore": "number | null (0-1)",
         "matchReason": "string | null (the 'Why you were matched' line)",
+        "parsedAt": "Timestamp | null",
+        "arrivedAt": "Timestamp | null",
         "createdAt": "Timestamp",
         "resolvedAt": "Timestamp | null",
         "responseMinutes": "number | null",

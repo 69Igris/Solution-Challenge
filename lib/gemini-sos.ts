@@ -250,7 +250,7 @@ function getGenAI(): GoogleGenAI {
   return _client;
 }
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // ---------------------------------------------------------------------------
 // Public entrypoint
@@ -262,6 +262,13 @@ export async function parseSosWithGemini(
     // Short-circuit — nothing to parse, return a flagged stub. Saves the
     // model call and lets the dashboard surface this instantly.
     return emptyInputStub(input.language);
+  }
+
+  // Offline / quota-blocked fallback — deterministic keyword-based parser.
+  // Set MOCK_GEMINI=1 in .env.local to keep building when the real API is
+  // unavailable (rate-limited, no billing, conference WiFi, etc.).
+  if (process.env.MOCK_GEMINI === '1') {
+    return mockParse(input);
   }
 
   const ai = getGenAI();
@@ -311,17 +318,20 @@ export async function parseSosWithGemini(
       'Now classify this SOS. Return ONLY the JSON object that conforms to the response schema. Localize `summaryLocalized` into the citizen language above.',
   });
 
-  // Call Gemini with structured output enforcement
-  const response = await ai.models.generateContent({
+  // ── Resilience layer ────────────────────────────────────────────────
+  // Call Gemini with structured output enforcement. If Gemini is overloaded
+  // (503 UNAVAILABLE) or returns a transient error, retry once after 2s.
+  // If that fails too, fall back to the deterministic mock parser so the
+  // SOS pipeline NEVER fails because of an AI-side outage.
+  const requestParams = {
     model: GEMINI_MODEL,
-    contents: [{ role: 'user', parts }],
+    contents: [{ role: 'user' as const, parts }],
     config: {
       systemInstruction: SOS_SYSTEM_PROMPT,
       responseMimeType: 'application/json',
       responseSchema: RESPONSE_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1024,
-      // Block harmful content but keep emergency vocabulary flowing.
       safetySettings: [
         {
           category: HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -333,11 +343,40 @@ export async function parseSosWithGemini(
         },
       ],
     },
-  });
+  };
+
+  let response;
+  try {
+    response = await ai.models.generateContent(requestParams);
+  } catch (err) {
+    if (isTransientGeminiError(err)) {
+      console.warn('[gemini] transient error, retrying once in 2s:', errMsg(err));
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        response = await ai.models.generateContent(requestParams);
+      } catch (retryErr) {
+        console.warn(
+          '[gemini] retry failed, falling back to mock parser. Reason:',
+          errMsg(retryErr),
+        );
+        return mockParse(input);
+      }
+    } else {
+      // Non-transient error (auth, quota, schema) — also fall back to mock so
+      // the citizen still gets a usable SOS recorded. The flagReason field
+      // surfaces the underlying issue to the dashboard.
+      console.warn('[gemini] non-transient error, falling back to mock parser. Reason:', errMsg(err));
+      const mock = mockParse(input);
+      mock.flagged = true;
+      mock.flagReason = `gemini error: ${errMsg(err).slice(0, 60)}`;
+      return mock;
+    }
+  }
 
   const raw = response.text ?? '';
   if (!raw) {
-    throw new Error('Gemini returned an empty response');
+    console.warn('[gemini] empty response, falling back to mock parser');
+    return mockParse(input);
   }
 
   let parsed: SosParsed;
@@ -386,4 +425,142 @@ function emptyInputStub(_lang: SupportedLanguage): SosParsed {
     flagged: true,
     flagReason: 'empty input',
   };
+}
+
+// ---------------------------------------------------------------------------
+// MOCK_GEMINI fallback — deterministic keyword-based parser
+// ---------------------------------------------------------------------------
+/**
+ * Realistic offline parser used when MOCK_GEMINI=1.
+ *
+ * Behaviour mimics what Gemini would return: scans the text + presence of
+ * media for canonical disaster keywords across English + common Indic-language
+ * romanisations, and synthesises a plausible SosParsed. Used for:
+ *   - Continuing development when real Gemini quota is unavailable
+ *   - Demo-day fallback if conference WiFi / rate limits misbehave
+ *   - Cheap deterministic CI tests
+ */
+function mockParse(input: SosParseInput): SosParsed {
+  const haystack = (input.text ?? '').toLowerCase();
+  const has = (...needles: string[]) =>
+    needles.some((n) => haystack.includes(n));
+
+  // ---- Need types ----
+  const needTypes = new Set<NeedType>();
+  if (has('blood', 'bleed', 'unconscious', 'breath', 'saans', 'medicine', 'medical', 'injury', 'injured', 'fracture', 'oxygen', 'pregnant', 'garbhwati'))
+    needTypes.add('medical');
+  if (has('water rising', 'flood', 'paani', 'bhar gaya', 'rising', 'evacuat'))
+    needTypes.add('evacuation');
+  if (has('stuck', 'trapped', 'phans', 'submerged', 'cannot get out', 'rescue'))
+    needTypes.add('rescue');
+  if (has('roof', 'collapsed', 'displaced', 'no shelter', 'homeless', 'shelter'))
+    needTypes.add('shelter');
+  if (has('food', 'khana', 'hungry', 'no eat', 'infant', 'baby food', 'formula'))
+    needTypes.add('food');
+  if (has('drinking water', 'no water', 'thirsty', 'paani nahi'))
+    needTypes.add('water');
+  if (needTypes.size === 0) needTypes.add('other');
+
+  // ---- Vulnerabilities ----
+  const flags = {
+    elderly: has('elderly', 'grandmother', 'grandfather', 'dadi', 'nana', 'nani', 'buzurg', 'old', 'aged'),
+    child: has('child', 'kid', 'baby', 'bachcha', 'infant', 'toddler'),
+    pregnant: has('pregnant', 'garbhwati', 'expecting'),
+    disabled: has('wheelchair', 'paralysed', 'disabled', 'cannot walk', 'blind', 'deaf'),
+    injured: has('injury', 'injured', 'bleeding', 'blood', 'fracture', 'broken'),
+  };
+
+  // ---- Severity ----
+  let severity: SeverityLevel = 'medium';
+  let severityScore = 45;
+  if (has('drowning', 'unconscious', 'severe bleed', 'fire spread', 'dying', 'critical', 'cannot breath', 'no breath')) {
+    severity = 'critical';
+    severityScore = 90;
+  } else if (
+    needTypes.has('medical') ||
+    needTypes.has('evacuation') ||
+    needTypes.has('rescue') ||
+    flags.elderly ||
+    flags.pregnant ||
+    flags.injured ||
+    has('water rising', 'urgent', 'asap', 'immediate')
+  ) {
+    severity = 'high';
+    severityScore = 72;
+  } else if (needTypes.size === 1 && needTypes.has('other')) {
+    severity = 'low';
+    severityScore = 18;
+  }
+
+  // ---- Accessibility notes ----
+  const notes: string[] = [];
+  const floorMatch = haystack.match(/(\d)(?:st|nd|rd|th)?\s*floor/);
+  if (floorMatch) notes.push(`stuck on ${floorMatch[1]} floor`);
+  if (has('water rising', 'rising water')) notes.push('water rising');
+  if (has('ground floor flooded', 'paani bhar gaya')) notes.push('ground floor flooded');
+  if (has('road blocked', 'tree fallen', 'blocked')) notes.push('road blocked');
+  if (has('door jammed', 'cannot open door')) notes.push('door jammed');
+  const accessibilityNotes = notes.length ? notes.join(', ').slice(0, 140) : null;
+
+  // ---- Headcount ----
+  const headcountMatch = haystack.match(/(\d+)\s*(?:people|persons|members|of us|family)/);
+  const headcount = headcountMatch ? Math.max(1, parseInt(headcountMatch[1], 10)) : 1;
+
+  // ---- Summary ----
+  const subject = flags.elderly
+    ? 'Elderly person'
+    : flags.child
+      ? 'Child'
+      : flags.pregnant
+        ? 'Pregnant woman'
+        : `Citizen${headcount > 1 ? ` and ${headcount - 1} others` : ''}`;
+  const need = needTypes.has('medical')
+    ? 'with medical need'
+    : needTypes.has('rescue')
+      ? 'trapped, needs rescue'
+      : needTypes.has('evacuation')
+        ? 'needs evacuation'
+        : needTypes.has('shelter')
+          ? 'needs shelter'
+          : 'needs assistance';
+  const where = accessibilityNotes ? ` — ${accessibilityNotes}` : '';
+  const summary = `${subject} ${need}${where}.`.slice(0, 160);
+
+  return {
+    needTypes: Array.from(needTypes),
+    severity,
+    severityScore,
+    summary,
+    summaryLocalized: summary, // Mock: skip translation
+    headcount,
+    vulnerabilityFlags: flags,
+    accessibilityNotes,
+    confidence: input.text ? 0.78 : 0.55,
+    flagged: false,
+    flagReason: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Error classification — for retry/fallback decisions
+// ---------------------------------------------------------------------------
+function errMsg(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
+ * True for errors that are likely temporary and worth retrying once:
+ *   - 503 UNAVAILABLE (model overloaded — Gemini's most common failure mode)
+ *   - 429 RESOURCE_EXHAUSTED (rate-limited)
+ *   - DEADLINE_EXCEEDED (request timeout)
+ *   - Network blips
+ */
+function isTransientGeminiError(err: unknown): boolean {
+  const msg = errMsg(err);
+  return (
+    /\b503\b|UNAVAILABLE|overload/i.test(msg) ||
+    /\b429\b|RESOURCE_EXHAUSTED|rate.?limit/i.test(msg) ||
+    /DEADLINE_EXCEEDED|ETIMEDOUT|ECONNRESET|ENOTFOUND/i.test(msg)
+  );
 }

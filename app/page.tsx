@@ -1,84 +1,134 @@
 import Link from 'next/link';
-import { ArrowRight, Siren, Users, LayoutDashboard } from 'lucide-react';
+import { ArrowRight, Siren, Users, LayoutDashboard, TestTube } from 'lucide-react';
+import { Frame, CornerBrackets, Eyebrow, GoldRule, RomanNumeral } from '@/components/ui/deco';
+import { SunburstBackdrop } from '@/components/ui/SunburstBackdrop';
 
 /**
  * SANKALP — Landing / Role Picker
  *
- * Three doors: Citizen (SOS), Volunteer (missions), Coordinator (dashboard).
- * In production this becomes phone-OTP onboarding; for the MVP demo we
- * surface all three so judges can hop between perspectives in seconds.
+ * The canonical Art Deco reference for the rest of the codebase.
+ * - Sunburst-radiated hero with Marcellus all-caps title and gold gradient.
+ * - Three doors as framed exhibits (I, II, III) with corner brackets.
+ * - Symmetric, centered layout — Art Deco favours bilateral symmetry.
+ * - Sharp 0px radii, gold borders that intensify on hover, no soft shadows.
  */
 export default function Home() {
-  const doors = [
+  const exhibits = [
     {
       href: '/sos',
-      title: 'I need help',
+      numeral: 1,
+      label: 'I need help',
       subtitle: 'Citizen — raise an SOS in your language',
       icon: Siren,
-      accent: 'from-severity-medical/30 to-transparent',
-      ring: 'ring-severity-medical/30',
     },
     {
       href: '/missions',
-      title: 'I can help',
+      numeral: 2,
+      label: 'I can help',
       subtitle: 'Volunteer — accept a matched mission',
       icon: Users,
-      accent: 'from-sankalp-500/30 to-transparent',
-      ring: 'ring-sankalp-500/30',
     },
     {
       href: '/command',
-      title: 'Command center',
+      numeral: 3,
+      label: 'Command center',
       subtitle: 'Coordinator — live operations dashboard',
       icon: LayoutDashboard,
-      accent: 'from-severity-resolved/30 to-transparent',
-      ring: 'ring-severity-resolved/30',
     },
   ] as const;
 
   return (
-    <main className="relative isolate flex min-h-dvh flex-col items-center justify-center px-6 py-16">
-      <div className="mx-auto max-w-4xl text-center">
-        <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs font-medium tracking-wider text-white/70 backdrop-blur">
-          <span className="severity-dot text-severity-resolved" />
-          GOOGLE SOLUTION CHALLENGE · 2026
-        </div>
-        <h1 className="mt-4 text-balance text-5xl font-semibold tracking-tight md:text-7xl">
-          SANKALP
-        </h1>
-        <p className="mt-3 text-base text-white/60 md:text-lg">
-          संकल्प · India&apos;s AI Conductor for Crisis Response
-        </p>
-        <p className="mx-auto mt-6 max-w-2xl text-pretty text-sm leading-relaxed text-white/50 md:text-base">
-          When disaster strikes, chaos becomes choreography. SANKALP routes every voice,
-          every photo, every plea — to the right volunteer in the right place at the right time.
-        </p>
-      </div>
+    <main className="relative isolate flex min-h-dvh flex-col items-center justify-center px-6 py-20">
+      {/* ─────────────────────── Sunburst hero backdrop ─────────────────────── */}
+      <SunburstBackdrop intensity={0.16} />
 
-      <div className="mt-14 grid w-full max-w-5xl gap-4 md:grid-cols-3">
-        {doors.map(({ href, title, subtitle, icon: Icon, accent, ring }) => (
-          <Link
-            key={href}
-            href={href}
-            className={`group glass glass-sheen relative flex flex-col gap-4 p-6 transition-all duration-300 hover:-translate-y-1 hover:ring-1 ${ring}`}
-          >
-            <div className={`absolute inset-0 bg-gradient-to-br ${accent} opacity-0 transition-opacity duration-500 group-hover:opacity-100`} />
-            <Icon className="relative h-6 w-6 text-white/80" strokeWidth={1.5} />
-            <div className="relative">
-              <h2 className="text-lg font-medium text-white">{title}</h2>
-              <p className="mt-1 text-sm text-white/55">{subtitle}</p>
-            </div>
-            <div className="relative mt-auto flex items-center gap-2 text-sm text-white/70">
-              Enter
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-            </div>
+      {/* ─────────────────────── Hero ─────────────────────── */}
+      <section className="relative z-10 mx-auto flex max-w-4xl flex-col items-center text-center">
+        <Eyebrow className="flex items-center gap-2">
+          <span className="severity-dot text-gold-300" />
+          Google Solution Challenge · 2026
+        </Eyebrow>
+
+        <GoldRule className="mt-6" width="w-32" />
+
+        <h1 className="mt-6 deco-display text-6xl leading-none text-champagne md:text-8xl">
+          <span className="text-gold-metallic">Sankalp</span>
+        </h1>
+        <div className="mt-2 font-display text-lg tracking-wide text-gold-200/80 md:text-xl">
+          संकल्प
+        </div>
+
+        <GoldRule className="mt-6" width="w-48" />
+
+        <p className="mt-8 max-w-2xl text-pretty font-sans text-sm leading-relaxed text-champagne/65 md:text-base">
+          India&apos;s AI Conductor for Crisis Response. When disaster strikes,
+          chaos becomes choreography — every voice, every photo, every plea
+          routed to the right volunteer in the right place at the right time.
+        </p>
+      </section>
+
+      {/* ─────────────────────── Three exhibits ─────────────────────── */}
+      <section className="relative z-10 mt-20 grid w-full max-w-5xl gap-5 md:grid-cols-3">
+        {exhibits.map(({ href, numeral, label, subtitle, icon: Icon }) => (
+          <Link key={href} href={href} className="group block">
+            <Frame variant="strong" interactive className="relative h-full p-6">
+              <CornerBrackets size="md" />
+
+              {/* Roman numeral exhibit marker */}
+              <div className="flex items-start justify-between">
+                <div className="text-[10px] uppercase tracking-deco text-gold-300/70">
+                  Exhibit
+                </div>
+                <RomanNumeral
+                  value={numeral}
+                  className="text-2xl text-gold-300/80"
+                />
+              </div>
+
+              {/* Icon */}
+              <div className="mt-8 flex justify-center">
+                <Icon
+                  className="h-7 w-7 text-gold-300 transition-transform duration-500 ease-out group-hover:scale-110"
+                  strokeWidth={1.4}
+                />
+              </div>
+
+              {/* Heading */}
+              <div className="mt-8 text-center">
+                <div className="deco-display text-base text-champagne">{label}</div>
+                <div className="mt-3">
+                  <GoldRule width="w-12" />
+                </div>
+                <p className="mt-3 font-sans text-xs leading-relaxed text-champagne/55">
+                  {subtitle}
+                </p>
+              </div>
+
+              {/* CTA */}
+              <div className="mt-8 flex items-center justify-center gap-2 text-[10px] uppercase tracking-deco text-gold-300">
+                Enter
+                <ArrowRight className="h-3 w-3 transition-transform duration-300 group-hover:translate-x-1" />
+              </div>
+            </Frame>
           </Link>
         ))}
-      </div>
+      </section>
 
-      <p className="mt-16 text-xs uppercase tracking-[0.2em] text-white/30">
-        Built by Team NexusFlow
-      </p>
+      {/* ─────────────────────── Demo control footer link ─────────────────────── */}
+      <section className="relative z-10 mt-16 flex flex-col items-center">
+        <GoldRule width="w-16" />
+        <Link
+          href="/demo"
+          className="mt-5 inline-flex items-center gap-2 font-sans text-[10px] uppercase tracking-deco text-champagne/45 transition hover:text-gold-300"
+        >
+          <TestTube className="h-3 w-3" strokeWidth={1.6} />
+          Demo control center
+          <ArrowRight className="h-3 w-3" />
+        </Link>
+        <p className="mt-6 font-display text-[10px] uppercase tracking-deco-wide text-champagne/30">
+          Built by Team NexusFlow
+        </p>
+      </section>
     </main>
   );
 }
