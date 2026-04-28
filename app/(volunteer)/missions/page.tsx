@@ -13,7 +13,7 @@
  *   - Production: Firebase Auth phone-OTP populates this automatically.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -43,6 +43,20 @@ const DEFAULT_DEMO_VOLUNTEER = 'demo-volunteer-001';
 const ACTIVE_STATUSES = ['assigned', 'en_route', 'on_site'] as const;
 
 export default function VolunteerMissionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="grid flex-1 place-items-center">
+          <Loader2 className="h-5 w-5 animate-spin text-sankalp-400" />
+        </main>
+      }
+    >
+      <VolunteerMissionsPageInner />
+    </Suspense>
+  );
+}
+
+function VolunteerMissionsPageInner() {
   const sp = useSearchParams();
   const volunteerUid = sp?.get('as') ?? DEFAULT_DEMO_VOLUNTEER;
 
